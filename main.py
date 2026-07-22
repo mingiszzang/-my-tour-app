@@ -1645,7 +1645,7 @@ try:
     st.divider()
 
     st.subheader(
-        "💬 Solar AI 숙박 가이드"
+        "💬 AI 숙박 가이드🤓"
     )
 
     st.caption(
