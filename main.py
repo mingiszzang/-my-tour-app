@@ -279,15 +279,11 @@ try:
         st.stop()
 
     st.subheader("📍 지역 선택")
-
-    search_level = st.radio(
-        "조회 범위",
-        ["시도별 조회", "시군구별 조회"],
-        horizontal=True,
-    )
+    st.caption("시도와 시군구를 차례로 선택해 주세요.")
 
     col1, col2 = st.columns(2)
 
+    # 시도 선택
     with col1:
         sido_name = st.selectbox(
             "시도",
@@ -295,44 +291,34 @@ try:
         )
 
     selected_sido = next(
-        item for item in sido_list if item["name"] == sido_name
+        item for item in sido_list
+        if item["name"] == sido_name
     )
 
-    sigungu_name = ""
-    sigungu_code = ""
+    # 선택한 시도의 시군구 목록 불러오기
+    sigungu_list = load_regions(
+        tour_key,
+        selected_sido["code"],
+    )
 
-    if search_level == "시군구별 조회":
-        sigungu_list = load_regions(tour_key, selected_sido["code"])
+    if not sigungu_list:
+        st.warning("선택한 시도의 시군구 코드가 없습니다.")
+        st.stop()
 
-        if not sigungu_list:
-            st.warning("선택한 시도의 시군구 코드가 없습니다.")
-            st.stop()
-
-        with col2:
-            sigungu_name = st.selectbox(
-                "시군구",
-                [item["name"] for item in sigungu_list],
-            )
-
-        selected_sigungu = next(
-            item for item in sigungu_list
-            if item["name"] == sigungu_name
+    # 시군구 선택
+    with col2:
+        sigungu_name = st.selectbox(
+            "시군구",
+            [item["name"] for item in sigungu_list],
         )
-        sigungu_code = selected_sigungu["code"]
 
-    else:
-        with col2:
-            st.text_input(
-                "선택 지역",
-                value=f"{sido_name} 전체",
-                disabled=True,
-            )
-
-    region_name = (
-        f"{sido_name} {sigungu_name}"
-        if sigungu_name
-        else sido_name
+    selected_sigungu = next(
+        item for item in sigungu_list
+        if item["name"] == sigungu_name
     )
+
+    sigungu_code = selected_sigungu["code"]
+    region_name = f"{sido_name} {sigungu_name}"
 
     with st.spinner(f"{region_name} 숙박정보를 불러오는 중입니다..."):
         stays = load_stays(
