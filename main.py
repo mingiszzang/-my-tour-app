@@ -10,12 +10,12 @@ import streamlit as st
 # 기본 설정
 # =========================================================
 st.set_page_config(
-    page_title="대한민국 숙박여행 지도",
+    page_title="대한민국 숙박 지도",
     page_icon="🏨",
     layout="wide",
 )
 
-st.title("🏨 대한민국 숙박여행 지도")
+st.title("🏨 대한민국 숙박 지도")
 st.caption("한국관광공사 국문 관광정보 서비스 · 법정동 코드 기준")
 
 BASE_URL = "https://apis.data.go.kr/B551011/KorService2"
@@ -566,25 +566,19 @@ def show_selected_card(selected_row):
     title = html.escape(
         str(selected_row.get("숙박시설", "") or "")
     )
-
     address = html.escape(
         str(selected_row.get("주소", "") or "")
     )
-
     detail_address = html.escape(
         str(selected_row.get("상세주소", "") or "")
     )
-
     telephone = html.escape(
         str(selected_row.get("전화번호", "") or "")
     )
 
     full_address = " ".join(
         value
-        for value in [
-            address,
-            detail_address,
-        ]
+        for value in [address, detail_address]
         if value
     )
 
@@ -594,49 +588,48 @@ def show_selected_card(selected_row):
     if not telephone:
         telephone = "전화번호 정보 없음"
 
+    card_html = (
+        '<div style="'
+        'border:2px solid #e6aa22;'
+        'border-radius:12px;'
+        'padding:16px 18px;'
+        'margin:4px 0 14px 0;'
+        'background-color:rgba(255,193,7,0.12);'
+        'box-shadow:0 2px 8px rgba(0,0,0,0.06);'
+        '">'
+        '<div style="'
+        'font-size:0.82rem;'
+        'font-weight:700;'
+        'color:#9a671b;'
+        'margin-bottom:7px;'
+        '">'
+        '지도에서 선택한 숙박시설'
+        '</div>'
+        '<div style="'
+        'font-size:1.08rem;'
+        'font-weight:800;'
+        'margin-bottom:8px;'
+        '">'
+        f'{title}'
+        '</div>'
+        '<div style="'
+        'font-size:0.92rem;'
+        'line-height:1.5;'
+        'margin-bottom:5px;'
+        '">'
+        f'📍 {full_address}'
+        '</div>'
+        '<div style="'
+        'font-size:0.88rem;'
+        'opacity:0.82;'
+        '">'
+        f'☎ {telephone}'
+        '</div>'
+        '</div>'
+    )
+
     st.markdown(
-        f"""
-        <div style="
-            border: 2px solid #f4b400;
-            border-radius: 12px;
-            padding: 15px 17px;
-            margin: 4px 0 14px 0;
-            background: rgba(255, 193, 7, 0.13);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-        ">
-            <div style="
-                font-size: 0.82rem;
-                font-weight: 700;
-                color: #a66a00;
-                margin-bottom: 5px;
-            ">
-                지도에서 선택한 숙박시설
-            </div>
-
-            <div style="
-                font-size: 1.08rem;
-                font-weight: 800;
-                margin-bottom: 7px;
-            ">
-                {title}
-            </div>
-
-            <div style="
-                font-size: 0.92rem;
-                line-height: 1.5;
-            ">
-                📍 {full_address}
-            </div>
-
-            <div style="
-                font-size: 0.88rem;
-                margin-top: 5px;
-                opacity: 0.82;
-            ">
-                ☎ {telephone}
-            </div>
-        </div>
-        """,
+        card_html,
         unsafe_allow_html=True,
     )
 
@@ -838,7 +831,7 @@ try:
 
     with left:
         st.subheader(
-            "🗺️ 시군구 경계와 숙박시설"
+            "🗺️ 시군구별 숙박시설 한눈에"
         )
 
         st.pydeck_chart(
