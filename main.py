@@ -17,7 +17,6 @@ st.caption("한국관광공사 국문 관광정보 서비스 · 법정동 코드
 
 BASE_URL = "https://apis.data.go.kr/B551011/KorService2"
 
-# 전국 시군구 경계 GeoJSON
 GEOJSON_URL = (
     "https://raw.githubusercontent.com/greatsong/modudata/"
     "main/data/boundaries/sigungu_kr.geojson"
@@ -25,11 +24,11 @@ GEOJSON_URL = (
 
 
 # ---------------------------------------------------------
-# 한국관광공사 API 호출
+# API 공통 호출
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def call_api(endpoint, service_key, **extra_params):
-    """한국관광공사 API를 호출합니다."""
+    """한국관광공사 API를 호출하고 응답 본문을 반환합니다."""
 
     params = {
         "serviceKey": service_key,
@@ -49,7 +48,7 @@ def call_api(endpoint, service_key, **extra_params):
         )
         response.raise_for_status()
 
-        # 인증 오류 등은 JSON 대신 XML로 올 수 있습니다.
+        # 인증 오류는 JSON 대신 XML로 반환되는 경우가 있습니다.
         if (
             "faultInfo" in response.text
             or "OpenAPI_ServiceResponse" in response.text
@@ -92,7 +91,7 @@ def call_api(endpoint, service_key, **extra_params):
 
 
 def get_items(body):
-    """API 결과가 1개이거나 여러 개여도 목록으로 변환합니다."""
+    """API 결과가 한 개여도 항상 목록으로 바꿉니다."""
 
     items = body.get("items") or {}
     rows = items.get("item", []) if isinstance(items, dict) else []
@@ -104,11 +103,11 @@ def get_items(body):
 
 
 # ---------------------------------------------------------
-# 시도·시군구 법정동 코드 조회
+# 시도·시군구 코드 조회
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_regions(service_key, sido_code=""):
-    """시도 또는 시군구 법정동 코드 목록을 가져옵니다."""
+    """법정동 시도 또는 시군구 코드 목록을 가져옵니다."""
 
     params = {"lDongListYn": "N"}
 
@@ -133,7 +132,7 @@ def load_regions(service_key, sido_code=""):
 # ---------------------------------------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_stays(service_key, sido_code, sigungu_code):
-    """선택한 시군구의 숙박시설을 가져옵니다."""
+    """선택한 시군구의 숙박시설 정보를 가져옵니다."""
 
     body = call_api(
         "searchStay2",
@@ -145,7 +144,7 @@ def load_stays(service_key, sido_code, sigungu_code):
 
     result = []
 
-    for row in get_items(body):
+    for number, row in enumerate(get_items(body)):
         title = str(row.get("title", "")).strip()
 
         if not title:
@@ -158,23 +157,34 @@ def load_stays(service_key, sido_code, sigungu_code):
             longitude = None
             latitude = None
 
+        # contentid가 없는 경우에도 고유값이 생기도록 보완합니다.
+        stay_id = str(row.get("contentid", "")).strip()
+
+        if not stay_id:
+            stay_id = (
+                f"{title}|{row.get('addr1', '')}|"
+                f"{longitude}|{latitude}|{number}"
+            )
+
         result.append(
             {
+                "stay_id": stay_id,
                 "숙박시설": title,
                 "주소": str(row.get("addr1", "")).strip(),
                 "상세주소": str(row.get("addr2", "")).strip(),
                 "전화번호": str(row.get("tel", "")).strip(),
+                "대표이미지": str(row.get("firstimage", "")).strip(),
                 "경도": longitude,
                 "위도": latitude,
             }
         )
 
-    # 한글 숙박시설 이름 기준 오름차순
+    # 숙박시설 이름을 기준으로 가나다순 정렬
     return sorted(result, key=lambda item: item["숙박시설"])
 
 
 # ---------------------------------------------------------
-# 시군구 GeoJSON 불러오기
+# GeoJSON 불러오기
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_geojson():
@@ -203,7 +213,7 @@ def load_geojson():
 
 
 def find_boundary(geojson, region_code):
-    """5자리 법정동 코드가 정확히 일치하는 경계를 찾습니다."""
+    """5자리 코드가 정확히 일치하는 시군구 경계만 찾습니다."""
 
     matched = []
 
@@ -224,10 +234,10 @@ def find_boundary(geojson, region_code):
 
 
 # ---------------------------------------------------------
-# GeoJSON 좌표 범위 계산
+# 경계 좌표와 지도 중심 계산
 # ---------------------------------------------------------
-def collect_coordinates(value, coordinates):
-    """Polygon과 MultiPolygon의 모든 좌표를 한 목록으로 모읍니다."""
+def collect_coordinates(value, result):
+    """Polygon과 MultiPolygon 안의 모든 좌표를 모읍니다."""
 
     if (
         isinstance(value, list)
@@ -235,16 +245,16 @@ def collect_coordinates(value, coordinates):
         and isinstance(value[0], (int, float))
         and isinstance(value[1], (int, float))
     ):
-        coordinates.append((value[0], value[1]))
+        result.append((value[0], value[1]))
         return
 
     if isinstance(value, list):
         for item in value:
-            collect_coordinates(item, coordinates)
+            collect_coordinates(item, result)
 
 
 def get_boundary_view(boundary):
-    """선택한 경계가 화면에 들어오도록 지도 중심과 확대값을 계산합니다."""
+    """선택한 경계가 지도 안에 들어오도록 중심과 확대값을 계산합니다."""
 
     coordinates = []
 
@@ -285,32 +295,31 @@ def get_boundary_view(boundary):
 
 
 # ---------------------------------------------------------
-# 지도 생성
+# 지도 만들기
 # ---------------------------------------------------------
-def make_map(stay_df, boundary):
-    """시군구 실제 경계와 숙박시설 위치를 함께 표시합니다."""
+def make_map(stay_df, boundary, selected_id=None):
+    """시군구 경계, 일반 숙박시설, 선택 숙박시설을 함께 표시합니다."""
 
     layers = []
 
-    # 경계 데이터가 있으면 실제 행정구역을 반투명하게 표시합니다.
     if boundary:
         center_lat, center_lon, zoom = get_boundary_view(boundary)
 
-        boundary_layer = pdk.Layer(
-            "GeoJsonLayer",
-            boundary,
-            filled=True,
-            stroked=True,
-            get_fill_color=[52, 120, 246, 55],
-            get_line_color=[34, 88, 190, 230],
-            line_width_min_pixels=2,
-            pickable=False,
+        layers.append(
+            pdk.Layer(
+                "GeoJsonLayer",
+                boundary,
+                id="sigungu-boundary",
+                filled=True,
+                stroked=True,
+                get_fill_color=[52, 120, 246, 55],
+                get_line_color=[34, 88, 190, 230],
+                line_width_min_pixels=2,
+                pickable=False,
+            )
         )
 
-        layers.append(boundary_layer)
-
     else:
-        # 경계를 찾지 못하면 숙박시설 좌표를 기준으로 지도를 맞춥니다.
         valid = stay_df.dropna(subset=["경도", "위도"])
 
         if valid.empty:
@@ -320,24 +329,60 @@ def make_map(stay_df, boundary):
             center_lon = valid["경도"].mean()
             zoom = 10
 
-    # 좌표가 있는 숙박시설만 점으로 표시합니다.
-    valid_stays = stay_df.dropna(subset=["경도", "위도"]).copy()
+    valid_stays = stay_df.dropna(
+        subset=["경도", "위도"]
+    ).copy()
 
-    if not valid_stays.empty:
-        stay_layer = pdk.Layer(
-            "ScatterplotLayer",
-            valid_stays,
-            get_position="[경도, 위도]",
-            get_radius=350,
-            radius_min_pixels=5,
-            radius_max_pixels=14,
-            get_fill_color=[238, 82, 83, 220],
-            get_line_color=[255, 255, 255, 240],
-            line_width_min_pixels=1,
-            pickable=True,
+    selected_df = valid_stays[
+        valid_stays["stay_id"] == selected_id
+    ].copy()
+
+    normal_df = valid_stays[
+        valid_stays["stay_id"] != selected_id
+    ].copy()
+
+    # 선택되지 않은 일반 숙박시설
+    if not normal_df.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                normal_df,
+                id="stay-points",
+                get_position="[경도, 위도]",
+                get_radius=350,
+                radius_min_pixels=5,
+                radius_max_pixels=14,
+                get_fill_color=[238, 82, 83, 220],
+                get_line_color=[255, 255, 255, 240],
+                line_width_min_pixels=1,
+                pickable=True,
+                auto_highlight=True,
+                highlight_color=[255, 210, 60, 220],
+            )
         )
 
-        layers.append(stay_layer)
+    # 선택된 숙박시설은 더 크고 다른 색으로 표시
+    if not selected_df.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                selected_df,
+                id="selected-stay",
+                get_position="[경도, 위도]",
+                get_radius=600,
+                radius_min_pixels=10,
+                radius_max_pixels=22,
+                get_fill_color=[255, 193, 7, 245],
+                get_line_color=[120, 75, 0, 255],
+                line_width_min_pixels=3,
+                pickable=True,
+            )
+        )
+
+        # 표에서 선택하면 해당 점이 지도 중앙에 오도록 이동합니다.
+        center_lat = selected_df.iloc[0]["위도"]
+        center_lon = selected_df.iloc[0]["경도"]
+        zoom = max(zoom, 11)
 
     return pdk.Deck(
         map_style=(
@@ -366,10 +411,125 @@ def make_map(stay_df, boundary):
 
 
 # ---------------------------------------------------------
+# 지도와 표 선택 이벤트
+# ---------------------------------------------------------
+def on_map_select():
+    """지도 점을 클릭했을 때 선택 숙박시설을 저장합니다."""
+
+    map_state = st.session_state.get("stay_map", {})
+    selection = map_state.get("selection", {})
+    objects = selection.get("objects", {})
+
+    selected_objects = (
+        objects.get("selected-stay", [])
+        or objects.get("stay-points", [])
+    )
+
+    if not selected_objects:
+        return
+
+    selected_id = str(
+        selected_objects[0].get("stay_id", "")
+    )
+
+    if not selected_id:
+        return
+
+    st.session_state.selected_stay_id = selected_id
+
+    # 검색 중이어도 선택한 시설이 표에 나타나도록 검색어를 지웁니다.
+    st.session_state.search_keyword = ""
+
+    # 지도에서 선택한 숙박시설의 표 행도 선택합니다.
+    all_ids = st.session_state.get("all_stay_ids", [])
+
+    if selected_id in all_ids:
+        row_number = all_ids.index(selected_id)
+        st.session_state["stay_table"] = {
+            "selection": {
+                "rows": [row_number],
+            }
+        }
+
+
+def on_table_select():
+    """표의 행을 클릭했을 때 지도 선택 숙박시설을 바꿉니다."""
+
+    table_state = st.session_state.get("stay_table", {})
+    selection = table_state.get("selection", {})
+    selected_rows = selection.get("rows", [])
+
+    if not selected_rows:
+        return
+
+    table_ids = st.session_state.get("current_table_ids", [])
+    row_number = selected_rows[0]
+
+    if row_number < len(table_ids):
+        st.session_state.selected_stay_id = table_ids[row_number]
+
+
+# ---------------------------------------------------------
+# 선택 숙박시설 강조 카드
+# ---------------------------------------------------------
+def show_selected_card(selected_row):
+    """현재 선택된 숙박시설을 눈에 띄는 카드로 보여줍니다."""
+
+    title = selected_row.get("숙박시설", "")
+    address = selected_row.get("주소", "")
+    detail_address = selected_row.get("상세주소", "")
+    telephone = selected_row.get("전화번호", "")
+
+    full_address = " ".join(
+        value
+        for value in [address, detail_address]
+        if value
+    )
+
+    st.markdown(
+        f"""
+        <div style="
+            border: 2px solid #f4b400;
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin: 4px 0 14px 0;
+            background: rgba(255, 193, 7, 0.12);
+        ">
+            <div style="
+                font-size: 0.82rem;
+                font-weight: 700;
+                color: #a66a00;
+                margin-bottom: 5px;
+            ">
+                선택한 숙박시설
+            </div>
+            <div style="
+                font-size: 1.08rem;
+                font-weight: 800;
+                margin-bottom: 6px;
+            ">
+                {title}
+            </div>
+            <div style="font-size: 0.92rem;">
+                📍 {full_address or "주소 정보 없음"}
+            </div>
+            <div style="
+                font-size: 0.88rem;
+                margin-top: 4px;
+                opacity: 0.8;
+            ">
+                ☎ {telephone or "전화번호 정보 없음"}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------
 # 앱 실행
 # ---------------------------------------------------------
 try:
-    # Streamlit Cloud의 비밀 금고에서 인증키를 불러옵니다.
     tour_key = st.secrets["TOUR_KEY"]
 
 except KeyError:
@@ -390,7 +550,7 @@ try:
         st.stop()
 
     # -----------------------------------------------------
-    # 시군구 선택
+    # 지역 선택
     # -----------------------------------------------------
     st.subheader("📍 지역 선택")
     st.caption("시도와 시군구를 차례로 선택해 주세요.")
@@ -430,7 +590,6 @@ try:
         if item["name"] == sigungu_name
     )
 
-    # 관광공사 시도 코드 2자리와 시군구 코드 3자리를 결합합니다.
     region_code = (
         str(selected_sido["code"]).zfill(2)
         + str(selected_sigungu["code"]).zfill(3)
@@ -438,7 +597,15 @@ try:
 
     region_name = f"{sido_name} {sigungu_name}"
 
-    # 코드가 정확히 일치하는 GeoJSON 경계만 사용합니다.
+    # 지역이 바뀌면 이전 숙박시설 선택 상태를 초기화합니다.
+    if st.session_state.get("current_region") != region_code:
+        st.session_state.current_region = region_code
+        st.session_state.selected_stay_id = None
+        st.session_state.search_keyword = ""
+
+        st.session_state.pop("stay_map", None)
+        st.session_state.pop("stay_table", None)
+
     boundary = find_boundary(geojson, region_code)
 
     with st.spinner(f"{region_name} 숙박정보를 불러오는 중입니다..."):
@@ -451,20 +618,28 @@ try:
     stay_df = pd.DataFrame(
         stays,
         columns=[
+            "stay_id",
             "숙박시설",
             "주소",
             "상세주소",
             "전화번호",
+            "대표이미지",
             "경도",
             "위도",
         ],
     )
 
+    # 지도 클릭 시 전체 목록에서 행 위치를 찾기 위해 저장합니다.
+    st.session_state.all_stay_ids = (
+        stay_df["stay_id"].astype(str).tolist()
+        if not stay_df.empty
+        else []
+    )
+
+    selected_id = st.session_state.get("selected_stay_id")
+
     st.divider()
 
-    # -----------------------------------------------------
-    # 요약 정보
-    # -----------------------------------------------------
     map_count = (
         stay_df.dropna(subset=["경도", "위도"]).shape[0]
         if not stay_df.empty
@@ -480,11 +655,11 @@ try:
         st.warning(
             f"`{region_name}`의 법정동 코드 `{region_code}`와 일치하는 "
             "GeoJSON 경계를 찾지 못했습니다. "
-            "지역명을 이용해 임의로 연결하지 않고 숙박시설 위치만 표시합니다."
+            "숙박시설 위치만 표시합니다."
         )
 
     # -----------------------------------------------------
-    # 지도와 목록
+    # 지도와 숙박시설 목록
     # -----------------------------------------------------
     left, right = st.columns([1.35, 1])
 
@@ -492,13 +667,22 @@ try:
         st.subheader("🗺️ 시군구 경계와 숙박시설")
 
         st.pydeck_chart(
-            make_map(stay_df, boundary),
-            use_container_width=True,
+            make_map(
+                stay_df,
+                boundary,
+                selected_id,
+            ),
+            key="stay_map",
+            on_select=on_map_select,
+            selection_mode="single-object",
+            width="stretch",
+            height=620,
         )
 
         st.caption(
-            "파란색 영역은 선택한 시군구의 실제 경계이며, "
-            "빨간색 점은 숙박시설 위치입니다."
+            "파란색 영역은 선택한 시군구 경계입니다. "
+            "빨간색 점을 클릭하면 우측 숙박시설이 선택되고, "
+            "선택한 시설은 노란색으로 표시됩니다."
         )
 
     with right:
@@ -507,6 +691,7 @@ try:
         keyword = st.text_input(
             "숙박시설 이름 또는 주소",
             placeholder="예: 호텔, 한옥, 리조트",
+            key="search_keyword",
         ).strip()
 
         filtered_df = stay_df.copy()
@@ -525,7 +710,24 @@ try:
                 )
             )
 
-            filtered_df = filtered_df[mask]
+            filtered_df = filtered_df[mask].reset_index(drop=True)
+        else:
+            filtered_df = filtered_df.reset_index(drop=True)
+
+        # 표에서 선택된 행과 stay_id를 연결하기 위한 목록입니다.
+        st.session_state.current_table_ids = (
+            filtered_df["stay_id"].astype(str).tolist()
+            if not filtered_df.empty
+            else []
+        )
+
+        # 현재 선택한 숙박시설을 카드로 강조합니다.
+        selected_rows = stay_df[
+            stay_df["stay_id"] == selected_id
+        ]
+
+        if not selected_rows.empty:
+            show_selected_card(selected_rows.iloc[0])
 
         st.caption(f"가나다순 · {len(filtered_df):,}개")
 
@@ -535,13 +737,18 @@ try:
             )
 
         else:
+            table_df = filtered_df[
+                ["숙박시설", "주소", "상세주소", "전화번호"]
+            ].copy()
+
             st.dataframe(
-                filtered_df[
-                    ["숙박시설", "주소", "상세주소", "전화번호"]
-                ],
-                use_container_width=True,
-                hide_index=True,
+                table_df,
+                key="stay_table",
+                on_select=on_table_select,
+                selection_mode="single-row",
+                width="stretch",
                 height=500,
+                hide_index=True,
                 column_config={
                     "숙박시설": st.column_config.TextColumn(
                         "숙박시설",
@@ -550,6 +757,14 @@ try:
                     "주소": st.column_config.TextColumn(
                         "주소",
                         width="large",
+                    ),
+                    "상세주소": st.column_config.TextColumn(
+                        "상세주소",
+                        width="small",
+                    ),
+                    "전화번호": st.column_config.TextColumn(
+                        "전화번호",
+                        width="small",
                     ),
                 },
             )
@@ -561,6 +776,4 @@ except Exception as error:
     st.error(
         "앱을 실행하는 중 예상하지 못한 문제가 발생했습니다."
     )
-
-    # Streamlit Cloud 로그에서 실제 오류를 확인할 수 있게 남깁니다.
     st.exception(error)
